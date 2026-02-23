@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models import KPIInstance, KPITemplate, KPITemplateMetric
 
 _ALLOWED_FUNCS = {"min": min, "max": max, "round": round, "Decimal": Decimal}
@@ -75,13 +76,15 @@ def validate_formula(formula: str) -> None:
         tree = ast.parse(formula, mode="eval")
     except SyntaxError as exc:
         raise FormulaValidationError("Formula syntax error") from exc
-    _SafeFormulaEvaluator({
-        "max_total_amount": Decimal("1"),
-        "weight_percent": Decimal("1"),
-        "plan_value": Decimal("1"),
-        "fact_value": Decimal("1"),
-        "max_metric_amount": Decimal("1"),
-    }).visit(tree)
+    _SafeFormulaEvaluator(
+        {
+            "max_total_amount": Decimal("1"),
+            "weight_percent": Decimal("1"),
+            "plan_value": Decimal("1"),
+            "fact_value": Decimal("1"),
+            "max_metric_amount": Decimal("1"),
+        }
+    ).visit(tree)
 
 
 def evaluate_formula(formula: str, context: dict[str, Decimal]) -> Decimal:
@@ -93,9 +96,23 @@ def evaluate_formula(formula: str, context: dict[str, Decimal]) -> Decimal:
     return Decimal(str(value))
 
 
+def salary_components(base_salary: Decimal, salary_share_percent: Decimal, overtime_hours_x1: Decimal, overtime_hours_x2: Decimal) -> dict[str, Decimal]:
+    salary_kpi_amount = base_salary * (salary_share_percent / Decimal("100"))
+    hourly_rate = Decimal("0") if settings.working_hours_per_month == 0 else base_salary / Decimal(str(settings.working_hours_per_month))
+    overtime_x1_amount = overtime_hours_x1 * hourly_rate * Decimal(str(settings.overtime_multiplier_x1))
+    overtime_x2_amount = overtime_hours_x2 * hourly_rate * Decimal(str(settings.overtime_multiplier_x2))
+    return {
+        "salary_kpi_amount": salary_kpi_amount,
+        "hourly_rate": hourly_rate,
+        "overtime_x1_amount": overtime_x1_amount,
+        "overtime_x2_amount": overtime_x2_amount,
+        "overtime_total": overtime_x1_amount + overtime_x2_amount,
+    }
+
+
 async def calculate_instance(session: AsyncSession, instance: KPIInstance) -> KPIInstance:
     template: KPITemplate = instance.template
-    total = Decimal("0")
+    metrics_total = Decimal("0")
 
     for metric in instance.metrics:
         template_metric = await session.get(KPITemplateMetric, metric.template_metric_id)
@@ -111,9 +128,16 @@ async def calculate_instance(session: AsyncSession, instance: KPIInstance) -> KP
             "max_metric_amount": max_metric_amount,
         }
         metric.metric_result = evaluate_formula(template_metric.formula, context)
-        total += Decimal(str(metric.metric_result)) + Decimal(str(metric.overtime_result or 0))
+        metrics_total += Decimal(str(metric.metric_result)) + Decimal(str(metric.overtime_result or 0))
 
-    instance.total_amount = total + Decimal(str(instance.overtime_amount or 0))
+    comp = salary_components(
+        Decimal(str(instance.base_salary or 0)),
+        Decimal(str(instance.salary_share_percent or 0)),
+        Decimal(str(instance.overtime_hours_x1 or 0)),
+        Decimal(str(instance.overtime_hours_x2 or 0)),
+    )
+    instance.overtime_amount = comp["overtime_total"]
+    instance.total_amount = metrics_total + comp["salary_kpi_amount"] + comp["overtime_total"]
     return instance
 
 

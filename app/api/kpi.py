@@ -1,8 +1,8 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from io import BytesIO
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,12 +12,12 @@ from app.api.deps import permission_required
 from app.db.session import get_session
 from app.models import (
     KPIDispute,
-    KPITemplate,
-    KPITemplateMetric,
     KPIInstance,
     KPIInstanceMetric,
     KPIShareLink,
     KPIStatus,
+    KPITemplate,
+    KPITemplateMetric,
     SharePermission,
     User,
     UserStatus,
@@ -25,12 +25,10 @@ from app.models import (
 from app.schemas.kpi import DisputeCreate, KPIInstanceCreate, KPIShareLinkCreate, KPITemplateCreate
 from app.services.audit import audit_log
 from app.services.export import render_kpi_pdf, render_kpi_xlsx, render_zip
-from app.services.kpi_engine import FormulaValidationError, calculate_instance, validate_formula
+from app.services.kpi_engine import FormulaValidationError, calculate_instance, salary_components, validate_formula
 from app.services.telegram import TelegramNotifier
 
 router = APIRouter(prefix="/kpi", tags=["kpi"])
-
-
 
 
 @router.post("/templates")
@@ -49,12 +47,7 @@ async def create_template(
         except FormulaValidationError as exc:
             raise HTTPException(status_code=400, detail=f"Invalid formula for metric '{metric.title}': {exc}") from exc
 
-    template = KPITemplate(
-        title=data.title,
-        max_total_amount=data.max_total_amount,
-        formula_config=data.formula_config,
-        is_active=True,
-    )
+    template = KPITemplate(title=data.title, max_total_amount=data.max_total_amount, formula_config=data.formula_config, is_active=True)
     session.add(template)
     await session.flush()
 
@@ -74,6 +67,8 @@ async def create_template(
     await audit_log(session, user.id, "KPITemplate", str(template.id), "create", after_state=data.model_dump())
     await session.commit()
     return {"id": template.id, "title": template.title}
+
+
 @router.post("/instances")
 async def create_kpi_instance(
     data: KPIInstanceCreate,
@@ -82,13 +77,12 @@ async def create_kpi_instance(
 ):
     existing = (
         await session.execute(
-            select(KPIInstance).where(
-                KPIInstance.employee_id == data.employee_id,
-                KPIInstance.month == data.month,
-                KPIInstance.template_id == data.template_id,
-            )
+            select(KPIInstance)
+            .where(KPIInstance.employee_id == data.employee_id, KPIInstance.month == data.month, KPIInstance.template_id == data.template_id)
+            .options(selectinload(KPIInstance.metrics), selectinload(KPIInstance.template))
         )
     ).scalar_one_or_none()
+
     if existing and existing.status in {KPIStatus.approved, KPIStatus.archived}:
         raise HTTPException(status_code=409, detail="Approved or archived KPI cannot be modified")
 
@@ -98,16 +92,24 @@ async def create_kpi_instance(
         month=data.month,
         period_start=data.period_start,
         period_end=data.period_end,
-        overtime_amount=data.overtime_amount,
+        base_salary=data.base_salary,
+        salary_share_percent=data.salary_share_percent,
+        overtime_hours_x1=data.overtime_hours_x1,
+        overtime_hours_x2=data.overtime_hours_x2,
+        overtime_amount=0,
         status=KPIStatus.submitted,
     )
+
     if not existing:
         session.add(instance)
         await session.flush()
     else:
         instance.period_start = data.period_start
         instance.period_end = data.period_end
-        instance.overtime_amount = data.overtime_amount
+        instance.base_salary = data.base_salary
+        instance.salary_share_percent = data.salary_share_percent
+        instance.overtime_hours_x1 = data.overtime_hours_x1
+        instance.overtime_hours_x2 = data.overtime_hours_x2
         instance.status = KPIStatus.submitted
         for old_metric in list(instance.metrics):
             await session.delete(old_metric)
@@ -122,6 +124,7 @@ async def create_kpi_instance(
                 overtime_result=m.overtime_result,
             )
         )
+
     await session.flush()
     await session.refresh(instance, attribute_names=["metrics", "template"])
 
@@ -130,10 +133,42 @@ async def create_kpi_instance(
     except FormulaValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    await audit_log(session, user.id, "KPIInstance", str(instance.id), "upsert", after_state={"status": instance.status.value})
-    await session.commit()
+    comp = salary_components(
+        base_salary=instance.base_salary,
+        salary_share_percent=instance.salary_share_percent,
+        overtime_hours_x1=instance.overtime_hours_x1,
+        overtime_hours_x2=instance.overtime_hours_x2,
+    )
 
-    return {"id": instance.id, "total_amount": float(instance.total_amount), "status": instance.status.value}
+    await audit_log(session, user.id, "KPIInstance", str(instance.id), "upsert", after_state={"status": instance.status.value, "total": str(instance.total_amount)})
+
+    admins = (
+        await session.execute(select(User).join(User.roles).where(User.status == UserStatus.active).where(User.id != user.id))
+    ).scalars().all()
+    notifier = TelegramNotifier()
+    notify_text = (
+        f"📝 KPI заполнен\n"
+        f"KPI ID: {instance.id}\n"
+        f"Сотрудник ID: {instance.employee_id}\n"
+        f"Период: {instance.month}\n"
+        f"Оклад: {float(instance.base_salary):.2f}\n"
+        f"Доля от оклада: {float(instance.salary_share_percent):.2f}%\n"
+        f"Переработка x1: {float(instance.overtime_hours_x1):.2f} ч\n"
+        f"Переработка x2: {float(instance.overtime_hours_x2):.2f} ч\n"
+        f"Итог: {float(instance.total_amount):.2f}"
+    )
+    for admin in admins:
+        await notifier.send(session, admin.telegram_id, notify_text, "kpi_submitted", {"instance_id": instance.id})
+
+    await session.commit()
+    return {
+        "id": instance.id,
+        "total_amount": float(instance.total_amount),
+        "status": instance.status.value,
+        "salary_kpi_amount": float(comp["salary_kpi_amount"]),
+        "overtime_x1_amount": float(comp["overtime_x1_amount"]),
+        "overtime_x2_amount": float(comp["overtime_x2_amount"]),
+    }
 
 
 @router.post("/instances/{instance_id}/finalize")
@@ -155,7 +190,7 @@ async def finalize_kpi_instance(
     employee = await session.get(User, instance.employee_id)
     if employee:
         notifier = TelegramNotifier()
-        await notifier.send(session, employee.telegram_id, f"Ваш KPI #{instance.id} утверждён", "kpi_approved")
+        await notifier.send(session, employee.telegram_id, f"✅ Ваш KPI #{instance.id} утверждён", "kpi_approved")
 
     await session.commit()
     return {"id": instance.id, "status": instance.status.value}
@@ -172,15 +207,16 @@ async def create_dispute(
     await audit_log(session, user.id, "KPIDispute", "new", "create", after_state={"instance_id": data.instance_id})
 
     admins = (
-        await session.execute(
-            select(User).where(
-                and_(User.status == UserStatus.active, User.is_super_admin.is_(True))
-            )
-        )
+        await session.execute(select(User).where(and_(User.status == UserStatus.active, User.is_super_admin.is_(True))))
     ).scalars().all()
     notifier = TelegramNotifier()
     for admin in admins:
-        await notifier.send(session, admin.telegram_id, f"KPI dispute created for instance {data.instance_id}", "kpi_disputed")
+        await notifier.send(
+            session,
+            admin.telegram_id,
+            f"⚠️ KPI оспорен\nKPI ID: {data.instance_id}\nМетрика ID: {data.metric_id or '—'}\nКомментарий: {data.comment}",
+            "kpi_disputed",
+        )
     await session.commit()
     return {"status": "ok"}
 
@@ -286,8 +322,8 @@ async def export_kpi(
 @router.get("/instances")
 async def list_kpis(
     month: str | None = None,
-    period_start_from: str | None = None,
-    period_end_to: str | None = None,
+    period_start_from: date | None = None,
+    period_end_to: date | None = None,
     status: KPIStatus | None = None,
     employee_id: int | None = None,
     _: User = Depends(permission_required("kpi:view")),
@@ -305,4 +341,17 @@ async def list_kpis(
     if employee_id:
         q = q.where(KPIInstance.employee_id == employee_id)
     rows = (await session.execute(q.order_by(KPIInstance.period_start.desc()))).scalars().all()
-    return [{"id": i.id, "employee_id": i.employee_id, "month": i.month, "status": i.status.value, "total": float(i.total_amount)} for i in rows]
+    return [
+        {
+            "id": i.id,
+            "employee_id": i.employee_id,
+            "month": i.month,
+            "status": i.status.value,
+            "total": float(i.total_amount),
+            "base_salary": float(i.base_salary or 0),
+            "salary_share_percent": float(i.salary_share_percent or 0),
+            "overtime_hours_x1": float(i.overtime_hours_x1 or 0),
+            "overtime_hours_x2": float(i.overtime_hours_x2 or 0),
+        }
+        for i in rows
+    ]

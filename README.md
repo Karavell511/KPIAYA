@@ -78,3 +78,18 @@ max_metric_amount * (fact_value / plan_value)
 - Super admin bootstrap runs on startup and is enforced each launch.
 - Approved/archive protection should be expanded with dedicated policy checks if you add write endpoints.
 - For true HA scheduler persistence, back APScheduler with Redis/SQL job store in production.
+
+
+## Automatic salary-based KPI calculation
+For admin/editor flow you can now input only:
+- `base_salary` (оклад)
+- `salary_share_percent` (доля от оклада)
+- `overtime_hours_x1`
+- `overtime_hours_x2`
+
+System computes automatically:
+- KPI from salary: `base_salary * salary_share_percent / 100`
+- Overtime x1/x2 with env-configurable multipliers and monthly norm hours
+- Final total as unified amount in KPI instance
+
+Bot also supports KPI creation via inline button workflow for Admin/Manager/Super Admin.

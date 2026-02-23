@@ -9,6 +9,17 @@ class TelegramNotifier:
     def __init__(self) -> None:
         self.bot = Bot(token=settings.telegram_bot_token)
 
+    @staticmethod
+    def format_kpi_table(month: str, filled: list[str], unfilled: list[str]) -> str:
+        filled_rows = "\n".join(f"• {name}" for name in filled) if filled else "• —"
+        unfilled_rows = "\n".join(f"• {name}" for name in unfilled) if unfilled else "• —"
+        return (
+            f"📊 KPI Напоминание\n"
+            f"Период: {month}\n"
+            f"\n✅ Заполнено:\n{filled_rows}\n"
+            f"\n❗ Не заполнено:\n{unfilled_rows}"
+        )
+
     async def send(self, session: AsyncSession, telegram_id: int, text: str, event_type: str, payload: dict | None = None) -> None:
         status = "sent"
         try:

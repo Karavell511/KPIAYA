@@ -34,8 +34,12 @@ class KPIInstanceCreate(BaseModel):
     month: str
     period_start: date
     period_end: date
+    base_salary: float = 0
+    salary_share_percent: float = Field(default=0, ge=0, le=100)
+    overtime_hours_x1: float = Field(default=0, ge=0)
+    overtime_hours_x2: float = Field(default=0, ge=0)
     overtime_amount: float = 0
-    metrics: list[KPIInstanceMetricInput]
+    metrics: list[KPIInstanceMetricInput] = Field(default_factory=list)
 
 
 class KPIShareLinkCreate(BaseModel):

@@ -24,5 +24,9 @@ class Settings(BaseSettings):
     scheduler_timezone: str = "UTC"
     scheduler_admin_include_optional: bool = True
 
+    working_hours_per_month: float = 160.0
+    overtime_multiplier_x1: float = 1.0
+    overtime_multiplier_x2: float = 2.0
+
 
 settings = Settings()

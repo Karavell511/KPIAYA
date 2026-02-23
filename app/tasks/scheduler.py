@@ -30,12 +30,9 @@ async def monthly_reminder() -> None:
         )
         filled = [u.username for u in all_users if u.id in submitted_ids]
         unfilled = [u.username for u in all_users if u.id not in submitted_ids]
-        text = (
-            f"KPI reminder for {target_month}\n"
-            f"Filled: {', '.join(filled) if filled else '-'}\n"
-            f"Not filled: {', '.join(unfilled) if unfilled else '-'}"
-        )
+
         notifier = TelegramNotifier()
+        text = notifier.format_kpi_table(target_month, filled, unfilled)
         for admin in admins:
             if admin.roles and any(r.name == "Admin" for r in admin.roles) and not settings.scheduler_admin_include_optional:
                 continue
