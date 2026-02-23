@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
-from app.models import KPIInstance, Role, User
+from app.models import KPIInstance, KPIStatus, Role, User, UserStatus
 from app.services.telegram import TelegramNotifier
 
 scheduler = AsyncIOScheduler(timezone=settings.scheduler_timezone)
@@ -19,12 +19,12 @@ async def monthly_reminder() -> None:
                 select(User)
                 .join(User.roles)
                 .where(Role.name.in_(["Super Admin", "Admin"]))
-                .where(User.status == "active")
+                .where(User.status == UserStatus.active)
             )
         ).scalars().all()
-        all_users = (await session.execute(select(User).where(User.status == "active"))).scalars().all()
+        all_users = (await session.execute(select(User).where(User.status == UserStatus.active))).scalars().all()
         submitted_ids = set(
-            (await session.execute(select(KPIInstance.employee_id).where(KPIInstance.month == target_month, KPIInstance.status != "draft")))
+            (await session.execute(select(KPIInstance.employee_id).where(KPIInstance.month == target_month, KPIInstance.status != KPIStatus.draft)))
             .scalars()
             .all()
         )

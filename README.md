@@ -62,10 +62,14 @@ max_metric_amount * (fact_value / plan_value)
 
 ## Key endpoints
 - `POST /api/v1/auth/telegram`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/kpi/templates`
 - `POST /api/v1/kpi/instances`
+- `POST /api/v1/kpi/instances/{instance_id}/finalize`
 - `POST /api/v1/kpi/disputes`
 - `POST /api/v1/kpi/share-links`
 - `GET /api/v1/kpi/share/{uuid}`
+- `GET /api/v1/kpi/share/{uuid}/export?fmt=pdf|xlsx`
 - `GET /api/v1/kpi/export/{instance_id}?fmt=pdf|xlsx`
 - `GET /api/v1/users`
 - `GET /api/v1/users/export/csv`

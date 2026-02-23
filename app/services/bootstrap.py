@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models import Permission, Role, RolePermission, User, UserRole
+from app.models import Permission, Role, RolePermission, User, UserRole, UserStatus
 
 ROLE_PERMISSIONS: dict[str, list[str]] = {
     "Super Admin": ["*"],
@@ -50,14 +50,14 @@ async def bootstrap_security(session: AsyncSession) -> None:
             full_name=settings.super_admin_username,
             is_super_admin=True,
             whitelist_enabled=True,
-            status="active",
+            status=UserStatus.active,
         )
         session.add(super_admin)
         await session.flush()
     else:
         super_admin.is_super_admin = True
         super_admin.username = settings.super_admin_username
-        super_admin.status = "active"
+        super_admin.status = UserStatus.active
 
     super_role = (await session.execute(select(Role).where(Role.name == "Super Admin"))).scalar_one()
     ur = (

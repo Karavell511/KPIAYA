@@ -1,9 +1,25 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.entities import SharePermission, ShareScope
+
+
+class KPITemplateMetricInput(BaseModel):
+    title: str
+    description: str
+    weight_percent: float = Field(gt=0, le=100)
+    plan_value: float
+    allow_overtime: bool = False
+    formula: str
+
+
+class KPITemplateCreate(BaseModel):
+    title: str
+    max_total_amount: float = Field(gt=0)
+    formula_config: dict = Field(default_factory=dict)
+    metrics: list[KPITemplateMetricInput] = Field(min_length=1)
 
 
 class KPIInstanceMetricInput(BaseModel):

@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import AuthError, decode_token
 from app.db.session import get_session
-from app.models import Permission, Role, User
+from app.models import Permission, Role, User, UserStatus
 
 
 async def get_current_user(
@@ -20,7 +20,7 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     user = await session.get(User, int(payload["sub"]))
-    if not user or user.status != "active":
+    if not user or user.status != UserStatus.active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User inactive")
     return user
 
@@ -39,7 +39,8 @@ def permission_required(code: str):
             .where(User.id == user.id)
         )
         result = await session.execute(query)
-        if code not in set(result.scalars().all()):
+        granted = set(result.scalars().all())
+        if code not in granted:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Permission required: {code}")
         return user
 

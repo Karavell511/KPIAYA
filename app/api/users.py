@@ -1,14 +1,15 @@
 import csv
+from datetime import date
 from io import StringIO
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import permission_required
 from app.db.session import get_session
-from app.models import KPIInstance, Role, User
+from app.models import KPIInstance, Role, User, UserStatus
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -16,9 +17,11 @@ router = APIRouter(prefix="/users", tags=["users"])
 @router.get("")
 async def list_users(
     role: str | None = None,
-    status: str | None = None,
+    status: UserStatus | None = None,
     month: str | None = None,
     kpi_status: str | None = None,
+    from_date: date | None = None,
+    to_date: date | None = None,
     search: str | None = None,
     sort: str = "id",
     order: str = "asc",
@@ -35,12 +38,16 @@ async def list_users(
     if search:
         like = f"%{search}%"
         q = q.where(or_(User.username.ilike(like), User.full_name.ilike(like), User.telegram_id.cast(User.username.type).ilike(like)))
-    if month or kpi_status:
+    if month or kpi_status or from_date or to_date:
         q = q.join(KPIInstance, KPIInstance.employee_id == User.id)
         if month:
             q = q.where(KPIInstance.month == month)
         if kpi_status:
             q = q.where(KPIInstance.status == kpi_status)
+        if from_date:
+            q = q.where(KPIInstance.period_start >= from_date)
+        if to_date:
+            q = q.where(KPIInstance.period_end <= to_date)
 
     order_column = getattr(User, sort, User.id)
     q = q.order_by(order_column.asc() if order == "asc" else order_column.desc())
@@ -55,7 +62,7 @@ async def list_users(
 
 @router.get("/export/csv")
 async def export_users_csv(
-    status: str | None = None,
+    status: UserStatus | None = None,
     _: User = Depends(permission_required("users:export")),
     session: AsyncSession = Depends(get_session),
 ):
